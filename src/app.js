@@ -34,7 +34,7 @@ const state = {
 const tauri = window.__TAURI__ || null;
 
 // Initialize App
-document.addEventListener('DOMContentLoaded', () => {
+function startApp() {
   initIslandMorph();
   initTabs();
   initClockAndCalendar();
@@ -42,7 +42,13 @@ document.addEventListener('DOMContentLoaded', () => {
   initTimer();
   initShelf();
   initSMTC();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
+}
 
 // 1. Island Morphing & Resize
 function initIslandMorph() {

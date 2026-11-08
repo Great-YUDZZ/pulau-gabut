@@ -12,9 +12,9 @@
       {
         "label": "main",
         "title": "My Island",
-        "width": 280,
+        "width": 320,
         "height": 44,
-        "x": 0,
+        "x": 480,
         "y": 0,
         "decorations": false,
         "transparent": true,
@@ -22,7 +22,7 @@
         "skipTaskbar": false,
         "resizable": false,
         "shadow": false,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {
@@ -31,6 +31,12 @@
   },
   "bundle": {
     "active": false,
-    "icon": []
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
   }
 }

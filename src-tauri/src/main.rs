@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod applog;
 mod memory;
 mod smtc;
 
@@ -62,7 +63,7 @@ fn get_process_ram_mb() -> u64 {
 fn size_of(mode: &str) -> (f64, f64) {
     match mode {
         "expanded" => (450.0, 280.0),
-        _ => (280.0, 44.0), // compact
+        _ => (320.0, 44.0), // compact
     }
 }
 
@@ -79,7 +80,7 @@ fn place(win: &WebviewWindow, mode: &str) -> Result<(), String> {
     let scale = mon.scale_factor();
     let (pw, ph) = ((w * scale).round() as u32, (h * scale).round() as u32);
     let x = mon.position().x + ((mon.size().width as f64 - pw as f64) / 2.0).round() as i32;
-    let y = mon.position().y + 4; // slight offset from very top edge
+    let y = mon.position().y; // flush against top edge
 
     win.set_size(PhysicalSize::new(pw, ph))
         .map_err(|e| e.to_string())?;
@@ -91,7 +92,9 @@ fn place(win: &WebviewWindow, mode: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn set_mode(window: WebviewWindow, mode: String) -> Result<(), String> {
-    place(&window, &mode)
+    place(&window, &mode)?;
+    let _ = window.set_always_on_top(true);
+    Ok(())
 }
 
 #[tauri::command]
@@ -140,10 +143,23 @@ fn main() {
     tauri::Builder::default()
         .manage(system)
         .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = place(&window, "compact");
-                let _ = window.show();
+            let log_dir = app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir());
+            applog::init(&log_dir);
+            std::panic::set_hook(Box::new(|info| applog::log(&format!("PANIC: {info}"))));
+            applog::log("Memulai setup window My Island");
+
+            if let Some(win) = app.get_webview_window("main") {
+                if let Err(e) = place(&win, "compact") {
+                    applog::log(&format!("Gagal mengatur posisi awal: {e}"));
+                }
+                let _ = win.set_always_on_top(true);
+                let _ = win.show();
+                let _ = win.set_focus();
+                applog::log("Jendela utama berhasil ditempatkan dan ditampilkan");
+            } else {
+                applog::log("Peringatan: Jendela 'main' tidak ditemukan");
             }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
