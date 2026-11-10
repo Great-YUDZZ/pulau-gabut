@@ -268,15 +268,14 @@ export const App: React.FC = () => {
         }}
         transition={{
           type: 'spring',
-          stiffness: 400,
-          damping: 32,
-          mass: 0.8
+          stiffness: 280,
+          damping: 28,
+          mass: 0.6
         }}
         style={{
           background: '#000000',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          borderTop: 'none', // Menempel rata dan flush pada batas atas monitor
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.8), 0 2px 8px rgba(0, 0, 0, 0.9)',
+          border: 'none',
+          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.7)',
           overflow: 'hidden',
           position: 'relative',
           display: 'flex',
@@ -342,18 +341,8 @@ export const App: React.FC = () => {
             </span>
           </div>
 
-          {/* Center: Notch Camera Sensor Aesthetic */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <div 
-              style={{
-                width: 9,
-                height: 9,
-                borderRadius: '50%',
-                background: '#0a0a0c',
-                border: '1px solid rgba(255, 255, 255, 0.08)'
-              }}
-            />
-          </div>
+          {/* Center: Clean Spacer */}
+          <div style={{ flex: 1 }} />
 
           {/* Right: Media indicator atau Timer */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

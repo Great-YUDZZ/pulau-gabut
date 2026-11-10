@@ -11,7 +11,7 @@ use sysinfo::System;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
 };
 
 #[derive(Serialize)]
@@ -35,12 +35,33 @@ struct ProcessMemoryCounters {
     peak_pagefile_usage: usize,
 }
 
+#[repr(C)]
+struct MSG {
+    hwnd: isize,
+    message: u32,
+    w_param: usize,
+    l_param: isize,
+    time: u32,
+    pt_x: i32,
+    pt_y: i32,
+    l_private: u32,
+}
+
 #[cfg(windows)]
 extern "system" {
     fn GetCurrentProcess() -> isize;
     fn K32GetProcessMemoryInfo(h_process: isize, counters: *mut ProcessMemoryCounters, cb: u32) -> i32;
     fn RegisterHotKey(h_wnd: isize, id: i32, fs_modifiers: u32, vk: u32) -> i32;
+    fn GetMessageW(lp_msg: *mut MSG, h_wnd: isize, w_msg_filter_min: u32, w_msg_filter_max: u32) -> i32;
+    fn TranslateMessage(lp_msg: *const MSG) -> i32;
+    fn DispatchMessageW(lp_msg: *const MSG) -> isize;
 }
+
+const MOD_ALT: u32 = 0x0001;
+const MOD_CONTROL: u32 = 0x0002;
+const MOD_NOREPEAT: u32 = 0x4000;
+const VK_I: u32 = 0x49;
+const WM_HOTKEY: u32 = 0x0312;
 
 fn get_process_ram_mb() -> u64 {
     #[cfg(windows)]
@@ -216,6 +237,38 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // Background thread for System-wide Global Hotkey (Ctrl + Alt + I)
+            let app_handle_for_hotkey = app.handle().clone();
+            std::thread::spawn(move || {
+                #[cfg(windows)]
+                unsafe {
+                    // ID 1001 for Ctrl + Alt + I
+                    let registered = RegisterHotKey(0, 1001, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_I);
+                    if registered != 0 {
+                        applog::log("Global Hotkey Ctrl+Alt+I berhasil didaftarkan");
+                        let mut msg: MSG = std::mem::zeroed();
+                        while GetMessageW(&mut msg, 0, 0, 0) > 0 {
+                            if msg.message == WM_HOTKEY && msg.w_param == 1001 {
+                                if let Some(win) = app_handle_for_hotkey.get_webview_window("main") {
+                                    let is_vis = win.is_visible().unwrap_or(true);
+                                    if is_vis {
+                                        let _ = win.hide();
+                                    } else {
+                                        let _ = win.show();
+                                        let _ = win.set_always_on_top(true);
+                                        let _ = win.set_focus();
+                                    }
+                                }
+                            }
+                            TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                    } else {
+                        applog::log("Gagal mendaftarkan Global Hotkey Ctrl+Alt+I");
+                    }
+                }
+            });
 
             // Setup Main Window
             if let Some(win) = app.get_webview_window("main") {
