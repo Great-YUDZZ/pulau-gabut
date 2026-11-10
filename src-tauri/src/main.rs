@@ -239,6 +239,11 @@ fn open_file(path: String) {
 }
 
 fn main() {
+    let temp_log_dir = std::env::temp_dir();
+    applog::init(&temp_log_dir);
+    std::panic::set_hook(Box::new(|info| applog::log(&format!("PANIC: {info}"))));
+    applog::log("Aplikasi My Island dimulai di main()");
+
     let system = Arc::new(Mutex::new(System::new_all()));
     let sys_for_bg = Arc::clone(&system);
 

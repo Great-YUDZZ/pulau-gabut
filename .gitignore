@@ -19,3 +19,5 @@ Thumbs.db
 dist/
 src-legacy/
 tsconfig.tsbuildinfo
+.cargo/
+src-tauri/.cargo/
