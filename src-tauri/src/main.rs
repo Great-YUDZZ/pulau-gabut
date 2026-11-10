@@ -245,6 +245,7 @@ fn main() {
     });
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_drag::init())
         .manage(system)
         .setup(|app| {
             let log_dir = app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir());

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { 
   Play, 
   Pause, 
@@ -12,9 +13,11 @@ import {
   Timer, 
   Cpu, 
   X, 
-  FileText, 
   Music,
-  Check
+  Check,
+  Move,
+  GripVertical,
+  Trash2
 } from 'lucide-react';
 import { HardwareMetrics, WeatherData, MediaState, ShelfItem, TabType } from './types';
 
@@ -288,6 +291,40 @@ export const App: React.FC = () => {
       setShelfItems(prev => [...prev, ...newItems]);
       showToast(`${newItems.length} berkas disimpan ke Shelf`);
       setActiveTab('shelf');
+    }
+  };
+
+  // Drag Out of Shelf to External Apps / Explorer (Native Win32 OLE Drag & Drop)
+  const handleDragOut = async (itemsToDrag: ShelfItem[]) => {
+    const paths = itemsToDrag.map(i => i.path).filter((p): p is string => Boolean(p));
+    if (paths.length === 0) {
+      showToast('Jalur berkas tidak ditemukan di sistem');
+      return;
+    }
+
+    // 1. Immediately collapse notch so the desktop/Explorer underneath is clean and visible
+    setIsExpanded(false);
+    setTimeout(() => {
+      invokeTauri('set_mode', { mode: 'compact' });
+    }, 320);
+
+    try {
+      // 2. Start native OS OLE Drag & Drop
+      await startDrag(
+        {
+          item: paths,
+          icon: ''
+        },
+        (event) => {
+          if (event.result === 'Dropped') {
+            const draggedIds = new Set(itemsToDrag.map(i => i.id));
+            setShelfItems(prev => prev.filter(i => !draggedIds.has(i.id)));
+            showToast(`${paths.length} berkas berhasil dipindahkan`);
+          }
+        }
+      );
+    } catch (err) {
+      console.warn('Drag out failed or cancelled:', err);
     }
   };
 
@@ -753,106 +790,220 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                {/* 4. Tab File Shelf */}
+                {/* 4. Tab File Shelf (Bento Grid Staging) */}
                 {activeTab === 'shelf' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: 160 }}>
-                    <div style={{ 
-                      flex: 1, 
-                      overflowY: 'auto', 
-                      display: 'flex', 
-                      flexDirection: 'column', 
-                      gap: 6,
-                      paddingRight: 4
+                  <div style={{ display: 'flex', flexDirection: 'column', height: 165, gap: 6 }}>
+                    {/* Bento Header Bar */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '2px 4px'
                     }}>
-                      {shelfItems.length === 0 ? (
-                        <div style={{ 
-                          flex: 1, 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          alignItems: 'center', 
-                          justifyContent: 'center',
-                          color: '#52525b',
-                          gap: 6,
-                          fontSize: 11
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: '2px 7px',
+                          borderRadius: 6,
+                          background: 'rgba(16, 185, 129, 0.15)',
+                          color: '#10b981',
+                          letterSpacing: '0.02em'
                         }}>
-                          <FolderDown size={24} strokeWidth={1.5} />
-                          <span>Seret dan jatuhkan berkas ke sini</span>
-                        </div>
-                      ) : (
-                        shelfItems.map(item => (
-                          <div
-                            key={item.id}
-                            onClick={() => {
-                              if (item.path) {
-                                invokeTauri('open_file', { path: item.path });
-                              }
-                            }}
-                            title={item.path ? `Buka: ${item.path}` : item.name}
+                          {shelfItems.length} Titipan
+                        </span>
+                        <span style={{ fontSize: 10, color: '#71717a' }}>
+                          {shelfItems.length > 0 ? 'Tahan & seret ke folder tujuan' : 'Area titip sementara'}
+                        </span>
+                      </div>
+
+                      {shelfItems.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {shelfItems.length > 1 && (
+                            <button
+                              draggable
+                              onDragStart={(e) => {
+                                e.preventDefault();
+                                handleDragOut(shelfItems);
+                              }}
+                              onClick={() => handleDragOut(shelfItems)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                background: 'rgba(16, 185, 129, 0.15)',
+                                border: '1px solid rgba(16, 185, 129, 0.35)',
+                                color: '#10b981',
+                                borderRadius: 6,
+                                padding: '3px 8px',
+                                fontSize: 10,
+                                fontWeight: 600,
+                                cursor: 'grab'
+                              }}
+                              title="Seret tombol ini untuk memindahkan semua berkas sekaligus"
+                            >
+                              <Move size={11} />
+                              <span>Pindahkan Semua</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setShelfItems([])}
                             style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#71717a',
+                              fontSize: 10,
+                              cursor: 'pointer',
+                              padding: '3px 4px',
                               display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'space-between',
-                              background: '#0c0c0e',
-                              padding: '6px 8px',
-                              borderRadius: 8,
-                              border: 'none',
-                              fontSize: 11,
-                              cursor: item.path ? 'pointer' : 'default',
-                              transition: 'background 0.15s'
+                              gap: 3
                             }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#18181b'}
-                            onMouseLeave={e => e.currentTarget.style.background = '#0c0c0e'}
+                            title="Bersihkan semua titipan"
                           >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                              <FileText size={14} color="#38bdf8" />
-                              <span style={{ 
-                                color: '#f4f4f5', 
-                                whiteSpace: 'nowrap', 
-                                overflow: 'hidden', 
-                                textOverflow: 'ellipsis', 
-                                maxWidth: 260
-                              }}>
-                                {item.name}
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              {item.size > 0 && (
-                                <span style={{ color: '#71717a', fontSize: 10 }}>
-                                  {formatFileSize(item.size)}
-                                </span>
-                              )}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShelfItems(prev => prev.filter(i => i.id !== item.id));
-                                }}
-                                style={{ background: 'none', border: 'none', outline: 'none', color: '#71717a', cursor: 'pointer' }}
-                              >
-                                <X size={12} />
-                              </button>
-                            </div>
-                          </div>
-                        ))
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
                       )}
                     </div>
 
-                    {shelfItems.length > 0 && (
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 6 }}>
-                        <button
-                          onClick={() => setShelfItems([])}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            outline: 'none',
-                            color: '#ef4444',
-                            fontSize: 10,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Bersihkan Semua
-                        </button>
-                      </div>
-                    )}
+                    {/* Bento Grid Content */}
+                    <div style={{
+                      flex: 1,
+                      overflowY: 'auto',
+                      display: 'grid',
+                      gridTemplateColumns: shelfItems.length === 0 ? '1fr' : 'repeat(2, 1fr)',
+                      gap: 6,
+                      paddingRight: 2
+                    }}>
+                      {shelfItems.length === 0 ? (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          border: '1.5px dashed rgba(255, 255, 255, 0.1)',
+                          borderRadius: 12,
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          padding: '16px 12px',
+                          gap: 6,
+                          textAlign: 'center'
+                        }}>
+                          <FolderDown size={24} color="#10b981" strokeWidth={1.75} />
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#f4f4f5' }}>
+                            Titipkan Berkas di Sini
+                          </span>
+                          <span style={{ fontSize: 10, color: '#71717a', maxWidth: 260, lineHeight: 1.3 }}>
+                            Seret dari Windows Explorer ke notch, lalu seret keluar kapan saja ke folder atau aplikasi tujuan.
+                          </span>
+                        </div>
+                      ) : (
+                        shelfItems.map(item => {
+                          const ext = (item.type || 'file').toUpperCase();
+                          const isImage = ['PNG', 'JPG', 'JPEG', 'WEBP', 'GIF', 'SVG'].includes(ext);
+                          const isDoc = ['PDF', 'DOC', 'DOCX', 'TXT', 'MD', 'XLSX'].includes(ext);
+                          const isArchive = ['ZIP', 'RAR', '7Z', 'TAR', 'GZ'].includes(ext);
+
+                          const badgeColor = isImage ? '#10b981' : isDoc ? '#38bdf8' : isArchive ? '#a855f7' : '#eab308';
+                          const badgeBg = isImage ? 'rgba(16, 185, 129, 0.15)' : isDoc ? 'rgba(56, 189, 248, 0.15)' : isArchive ? 'rgba(168, 85, 247, 0.15)' : 'rgba(234, 179, 8, 0.15)';
+
+                          return (
+                            <div
+                              key={item.id}
+                              draggable
+                              onDragStart={(e) => {
+                                e.preventDefault();
+                                handleDragOut([item]);
+                              }}
+                              onClick={() => {
+                                if (item.path) {
+                                  invokeTauri('open_file', { path: item.path });
+                                }
+                              }}
+                              title={item.path ? `Tahan & seret untuk memindahkan, atau klik untuk membuka:\n${item.path}` : item.name}
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'space-between',
+                                background: '#0d0d10',
+                                border: '1px solid rgba(255, 255, 255, 0.07)',
+                                borderRadius: 10,
+                                padding: '7px 9px',
+                                cursor: 'grab',
+                                userSelect: 'none',
+                                transition: 'all 0.15s ease',
+                                position: 'relative'
+                              }}
+                              onMouseEnter={e => {
+                                e.currentTarget.style.background = '#15151a';
+                                e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.35)';
+                              }}
+                              onMouseLeave={e => {
+                                e.currentTarget.style.background = '#0d0d10';
+                                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.07)';
+                              }}
+                            >
+                              {/* Top Row: Ext badge, Drag Grip, Remove */}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                <span style={{
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  padding: '1px 5px',
+                                  borderRadius: 4,
+                                  background: badgeBg,
+                                  color: badgeColor,
+                                  letterSpacing: '0.04em'
+                                }}>
+                                  {ext.slice(0, 4)}
+                                </span>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                                  <GripVertical size={12} color="#52525b" />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShelfItems(prev => prev.filter(i => i.id !== item.id));
+                                    }}
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: '#52525b',
+                                      cursor: 'pointer',
+                                      padding: 0,
+                                      display: 'flex',
+                                      alignItems: 'center'
+                                    }}
+                                    onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
+                                    onMouseLeave={e => (e.currentTarget.style.color = '#52525b')}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Bottom Row: Name & Size */}
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{
+                                  fontSize: 11,
+                                  fontWeight: 500,
+                                  color: '#f4f4f5',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis'
+                                }}>
+                                  {item.name}
+                                </div>
+                                {item.size > 0 && (
+                                  <div style={{ fontSize: 9, color: '#71717a', marginTop: 1 }}>
+                                    {formatFileSize(item.size)}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
