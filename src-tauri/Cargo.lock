@@ -1822,6 +1822,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-drag",
+ "windows 0.57.0",
 ]
 
 [[package]]

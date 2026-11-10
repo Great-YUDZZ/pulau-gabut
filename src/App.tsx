@@ -171,7 +171,39 @@ export const App: React.FC = () => {
     return () => clearInterval(hInterval);
   }, []);
 
-  // 4. Pomodoro Countdown
+  // 4. Media State Poller via Native WinRT GSMTC
+  useEffect(() => {
+    let isMounted = true;
+    const pollMedia = async () => {
+      const info = await invokeTauri('get_media_info');
+      if (isMounted && info) {
+        setMedia(prev => {
+          if (
+            prev.title !== info.title ||
+            prev.artist !== info.artist ||
+            prev.isPlaying !== info.isPlaying
+          ) {
+            return {
+              title: info.title || 'Spotify / YouTube Music',
+              artist: info.artist || 'Menunggu pemutaran musik sistem',
+              isPlaying: Boolean(info.isPlaying),
+              source: info.source || 'SMTC'
+            };
+          }
+          return prev;
+        });
+      }
+    };
+
+    pollMedia();
+    const mInterval = setInterval(pollMedia, 1000);
+    return () => {
+      isMounted = false;
+      clearInterval(mInterval);
+    };
+  }, []);
+
+  // 5. Pomodoro Countdown
   useEffect(() => {
     let interval: number | null = null;
     if (timerRunning) {
@@ -243,14 +275,47 @@ export const App: React.FC = () => {
   const handlePlayPause = async () => {
     setMedia(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
     await invokeTauri('smtc_play_pause');
+    setTimeout(async () => {
+      const info = await invokeTauri('get_media_info');
+      if (info) {
+        setMedia({
+          title: info.title || 'Spotify / YouTube Music',
+          artist: info.artist || 'Menunggu pemutaran musik sistem',
+          isPlaying: Boolean(info.isPlaying),
+          source: info.source || 'SMTC'
+        });
+      }
+    }, 150);
   };
 
   const handleNext = async () => {
     await invokeTauri('smtc_next');
+    setTimeout(async () => {
+      const info = await invokeTauri('get_media_info');
+      if (info) {
+        setMedia({
+          title: info.title || 'Spotify / YouTube Music',
+          artist: info.artist || 'Menunggu pemutaran musik sistem',
+          isPlaying: Boolean(info.isPlaying),
+          source: info.source || 'SMTC'
+        });
+      }
+    }, 250);
   };
 
   const handlePrev = async () => {
     await invokeTauri('smtc_previous');
+    setTimeout(async () => {
+      const info = await invokeTauri('get_media_info');
+      if (info) {
+        setMedia({
+          title: info.title || 'Spotify / YouTube Music',
+          artist: info.artist || 'Menunggu pemutaran musik sistem',
+          isPlaying: Boolean(info.isPlaying),
+          source: info.source || 'SMTC'
+        });
+      }
+    }, 250);
   };
 
   // Drag and Drop for Temporary Shelf (HTML5 Fallback)

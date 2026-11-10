@@ -208,6 +208,11 @@ fn smtc_previous() {
 }
 
 #[tauri::command]
+fn get_media_info() -> Option<smtc::MediaTrackInfo> {
+    smtc::get_media_info()
+}
+
+#[tauri::command]
 fn get_hardware_metrics(system_state: tauri::State<Arc<Mutex<System>>>) -> HardwareMetrics {
     let mut sys = system_state.lock().unwrap();
     sys.refresh_cpu_usage();
@@ -364,6 +369,7 @@ fn main() {
             smtc_play_pause,
             smtc_next,
             smtc_previous,
+            get_media_info,
             get_hardware_metrics,
             open_file
         ])
