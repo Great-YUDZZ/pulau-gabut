@@ -17,9 +17,11 @@ import {
   Check,
   Move,
   GripVertical,
-  Trash2
+  Trash2,
+  Mic2
 } from 'lucide-react';
-import { HardwareMetrics, WeatherData, MediaState, ShelfItem, TabType } from './types';
+import { HardwareMetrics, WeatherData, MediaState, ShelfItem, TabType, LyricLine } from './types';
+import { fetchLyrics } from './lyrics';
 
 // Safely access Tauri invoke
 const invokeTauri = async (cmd: string, args: Record<string, any> = {}) => {
@@ -45,6 +47,14 @@ export const App: React.FC = () => {
     isPlaying: false,
     source: 'SMTC'
   });
+
+  // Synced Lyrics State
+  const [lyrics, setLyrics] = useState<LyricLine[] | null>(null);
+  const [currentLyricIndex, setCurrentLyricIndex] = useState<number>(-1);
+  const [showLyricsView, setShowLyricsView] = useState<boolean>(false);
+  const [isLoadingLyrics, setIsLoadingLyrics] = useState<boolean>(false);
+  const [playbackPosition, setPlaybackPosition] = useState<number>(0);
+  const activeLyricRef = useRef<HTMLDivElement | null>(null);
 
   // Weather & Hardware
   const [weather, setWeather] = useState<WeatherData>({
@@ -181,17 +191,24 @@ export const App: React.FC = () => {
           if (
             prev.title !== info.title ||
             prev.artist !== info.artist ||
-            prev.isPlaying !== info.isPlaying
+            prev.isPlaying !== info.isPlaying ||
+            Math.abs((prev.positionSec || 0) - (info.positionSec || 0)) > 2
           ) {
             return {
               title: info.title || 'Spotify / YouTube Music',
               artist: info.artist || 'Menunggu pemutaran musik sistem',
               isPlaying: Boolean(info.isPlaying),
-              source: info.source || 'SMTC'
+              source: info.source || 'SMTC',
+              positionSec: info.positionSec || 0,
+              durationSec: info.durationSec || 0
             };
           }
           return prev;
         });
+
+        if (typeof info.positionSec === 'number' && info.positionSec > 0) {
+          setPlaybackPosition(info.positionSec);
+        }
       }
     };
 
@@ -202,6 +219,73 @@ export const App: React.FC = () => {
       clearInterval(mInterval);
     };
   }, []);
+
+  // 4b. Fetch Synced Lyrics when track changes
+  useEffect(() => {
+    if (!media.title || media.title === 'Spotify / YouTube Music' || media.title === 'Media Aktif') {
+      setLyrics(null);
+      setCurrentLyricIndex(-1);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingLyrics(true);
+
+    fetchLyrics(media.title, media.artist, media.durationSec)
+      .then(fetched => {
+        if (isMounted) {
+          setLyrics(fetched);
+          setCurrentLyricIndex(-1);
+          setIsLoadingLyrics(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setLyrics(null);
+          setIsLoadingLyrics(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [media.title, media.artist]);
+
+  // 4c. Local playback clock interpolation for smooth real-time lyrics tracking
+  useEffect(() => {
+    if (!media.isPlaying) return;
+    const clock = setInterval(() => {
+      setPlaybackPosition(prev => prev + 0.25);
+    }, 250);
+    return () => clearInterval(clock);
+  }, [media.isPlaying]);
+
+  // 4d. Synchronize active lyric line with playback position
+  useEffect(() => {
+    if (!lyrics || lyrics.length === 0) {
+      setCurrentLyricIndex(-1);
+      return;
+    }
+    let activeIdx = -1;
+    for (let i = 0; i < lyrics.length; i++) {
+      if (playbackPosition >= lyrics[i].time) {
+        activeIdx = i;
+      } else {
+        break;
+      }
+    }
+    setCurrentLyricIndex(activeIdx);
+  }, [playbackPosition, lyrics]);
+
+  // 4e. Auto scroll active lyric into view
+  useEffect(() => {
+    if (activeLyricRef.current && showLyricsView) {
+      activeLyricRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+    }
+  }, [currentLyricIndex, showLyricsView]);
 
   // 5. Pomodoro Countdown
   useEffect(() => {
@@ -534,15 +618,25 @@ export const App: React.FC = () => {
                   <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 10 }} />
                   <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 5 }} />
                 </div>
-                <span style={{ 
-                  maxWidth: 90, 
-                  whiteSpace: 'nowrap', 
-                  overflow: 'hidden', 
-                  textOverflow: 'ellipsis',
-                  color: '#f4f4f5'
-                }}>
-                  {media.title}
-                </span>
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={lyrics && currentLyricIndex >= 0 ? `lyr-${currentLyricIndex}` : `title-${media.title}`}
+                    initial={{ opacity: 0, y: 3 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -3 }}
+                    transition={{ duration: 0.18 }}
+                    style={{ 
+                      maxWidth: lyrics && currentLyricIndex >= 0 ? 175 : 95, 
+                      whiteSpace: 'nowrap', 
+                      overflow: 'hidden', 
+                      textOverflow: 'ellipsis',
+                      color: lyrics && currentLyricIndex >= 0 ? '#10b981' : '#f4f4f5',
+                      fontWeight: lyrics && currentLyricIndex >= 0 ? 600 : 400
+                    }}
+                  >
+                    {lyrics && currentLyricIndex >= 0 ? lyrics[currentLyricIndex].text : media.title}
+                  </motion.span>
+                </AnimatePresence>
               </div>
             )}
           </div>
@@ -623,17 +717,18 @@ export const App: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                       <div 
                         style={{
-                          width: 48,
-                          height: 48,
+                          width: 44,
+                          height: 44,
                           borderRadius: 10,
                           background: '#141416',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          border: 'none'
+                          border: 'none',
+                          flexShrink: 0
                         }}
                       >
-                        <Music size={22} color="#10b981" />
+                        <Music size={20} color="#10b981" />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ 
@@ -657,7 +752,80 @@ export const App: React.FC = () => {
                           {media.artist}
                         </div>
                       </div>
+
+                      {/* Toggle Lirik Button */}
+                      <button
+                        onClick={() => setShowLyricsView(prev => !prev)}
+                        title="Tampilkan / Sembunyikan Lirik"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '5px 8px',
+                          borderRadius: 8,
+                          background: showLyricsView ? 'rgba(16, 185, 129, 0.15)' : '#18181b',
+                          border: showLyricsView ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid transparent',
+                          color: showLyricsView ? '#10b981' : '#a1a1aa',
+                          fontSize: 11,
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          flexShrink: 0
+                        }}
+                      >
+                        <Mic2 size={13} />
+                        <span>{showLyricsView ? 'Tutup' : 'Lirik'}</span>
+                      </button>
                     </div>
+
+                    {/* Lyrics Panel or Default View */}
+                    {showLyricsView ? (
+                      <div 
+                        style={{
+                          height: 105,
+                          background: '#09090b',
+                          borderRadius: 10,
+                          padding: '8px 12px',
+                          overflowY: 'auto',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          textAlign: 'center',
+                          border: '1px solid rgba(255, 255, 255, 0.05)'
+                        }}
+                      >
+                        {isLoadingLyrics ? (
+                          <div style={{ margin: 'auto', fontSize: 11, color: '#71717a' }}>
+                            Mencari lirik tersinkronisasi...
+                          </div>
+                        ) : lyrics && lyrics.length > 0 ? (
+                          lyrics.map((item, idx) => {
+                            const isCurrent = idx === currentLyricIndex;
+                            return (
+                              <div
+                                key={idx}
+                                ref={isCurrent ? activeLyricRef : null}
+                                style={{
+                                  fontSize: isCurrent ? 12 : 11,
+                                  fontWeight: isCurrent ? 600 : 400,
+                                  color: isCurrent ? '#10b981' : '#52525b',
+                                  transform: isCurrent ? 'scale(1.02)' : 'scale(1)',
+                                  transition: 'all 0.2s ease',
+                                  lineHeight: 1.4,
+                                  userSelect: 'none'
+                                }}
+                              >
+                                {item.text}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div style={{ margin: 'auto', fontSize: 11, color: '#71717a' }}>
+                            Lirik tidak ditemukan untuk lagu ini
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
 
                     {/* Controls */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
@@ -713,9 +881,11 @@ export const App: React.FC = () => {
                       </button>
                     </div>
 
-                    <div style={{ fontSize: 10, color: '#52525b', textAlign: 'center' }}>
-                      Sinkron otomatis dengan Windows SMTC (Spotify / YouTube)
-                    </div>
+                    {!showLyricsView && (
+                      <div style={{ fontSize: 10, color: '#52525b', textAlign: 'center' }}>
+                        Sinkron otomatis dengan Windows SMTC & LRCLIB Synced Lyrics
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 mod applog;
 mod memory;
@@ -11,7 +11,7 @@ use sysinfo::System;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
 };
 
 #[derive(Serialize)]
@@ -252,6 +252,13 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_drag::init())
         .manage(system)
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                applog::log("Aksi close dicegat: jendela disembunyikan ke background");
+            }
+        })
         .setup(|app| {
             let log_dir = app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir());
             applog::init(&log_dir);

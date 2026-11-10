@@ -15,6 +15,8 @@ pub struct MediaTrackInfo {
     pub artist: String,
     pub is_playing: bool,
     pub source: String,
+    pub position_sec: f64,
+    pub duration_sec: f64,
 }
 
 fn wait_async<T: windows::core::Interface + windows::core::RuntimeType>(
@@ -122,12 +124,22 @@ pub fn get_media_info() -> Option<MediaTrackInfo> {
 
         let app_id = session.SourceAppUserModelId().map(|s| s.to_string()).unwrap_or_default();
 
+        let (position_sec, duration_sec) = if let Ok(timeline) = session.GetTimelineProperties() {
+            let pos = timeline.Position().map(|t| t.Duration as f64 / 10_000_000.0).unwrap_or(0.0);
+            let end = timeline.EndTime().map(|t| t.Duration as f64 / 10_000_000.0).unwrap_or(0.0);
+            (pos, end)
+        } else {
+            (0.0, 0.0)
+        };
+
         if !title.is_empty() || !artist.is_empty() {
             return Some(MediaTrackInfo {
                 title: if title.is_empty() { "Media Aktif".to_string() } else { title },
                 artist: if artist.is_empty() { "Windows Media".to_string() } else { artist },
                 is_playing,
                 source: if app_id.is_empty() { "SMTC".to_string() } else { app_id },
+                position_sec,
+                duration_sec,
             });
         }
     }

@@ -18,6 +18,13 @@ export interface MediaState {
   isPlaying: boolean;
   albumArt?: string;
   source: string;
+  positionSec?: number;
+  durationSec?: number;
+}
+
+export interface LyricLine {
+  time: number;
+  text: string;
 }
 
 export interface ShelfItem {
