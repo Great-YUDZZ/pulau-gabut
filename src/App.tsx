@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { 
   Play, 
   Pause, 
@@ -187,6 +188,54 @@ export const App: React.FC = () => {
     };
   }, [timerRunning]);
 
+  // 5. Native OS Drag & Drop Listener via Tauri Webview API
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const setupTauriDragDrop = async () => {
+      try {
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent((event) => {
+          if (event.payload.type === 'enter' || event.payload.type === 'over') {
+            // Instantly expand the notch when files are dragged over
+            invokeTauri('set_mode', { mode: 'expanded' });
+            setIsExpanded(true);
+            setIsDraggingOver(true);
+            setActiveTab('shelf');
+          } else if (event.payload.type === 'drop') {
+            setIsDraggingOver(false);
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              const newItems: ShelfItem[] = paths.map((filePath: string) => {
+                const name = filePath.split(/[\\/]/).pop() || filePath;
+                const ext = name.split('.').pop() || 'file';
+                return {
+                  id: Math.random().toString(36).substring(2, 9),
+                  name,
+                  size: 0,
+                  type: ext,
+                  path: filePath,
+                  addedAt: new Date()
+                };
+              });
+              setShelfItems(prev => [...prev, ...newItems]);
+              showToast(`${newItems.length} berkas ditambahkan ke Shelf`);
+              setActiveTab('shelf');
+            }
+          } else if (event.payload.type === 'leave') {
+            setIsDraggingOver(false);
+          }
+        });
+      } catch (err) {
+        console.warn('Native onDragDropEvent listener not available:', err);
+      }
+    };
+
+    setupTauriDragDrop();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   // SMTC Media Actions
   const handlePlayPause = async () => {
     setMedia(prev => ({ ...prev, isPlaying: !prev.isPlaying }));
@@ -201,9 +250,22 @@ export const App: React.FC = () => {
     await invokeTauri('smtc_previous');
   };
 
-  // Drag and Drop for Temporary Shelf
+  // Drag and Drop for Temporary Shelf (HTML5 Fallback)
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    invokeTauri('set_mode', { mode: 'expanded' });
+    setIsExpanded(true);
+    setIsDraggingOver(true);
+    setActiveTab('shelf');
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    if (!isExpanded) {
+      invokeTauri('set_mode', { mode: 'expanded' });
+      setIsExpanded(true);
+      setActiveTab('shelf');
+    }
     setIsDraggingOver(true);
   };
 
@@ -257,6 +319,7 @@ export const App: React.FC = () => {
         outline: 'none',
         boxShadow: 'none'
       }}
+      onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -264,6 +327,9 @@ export const App: React.FC = () => {
       <motion.div
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         animate={{
           width: isExpanded ? 440 : 310,
           height: isExpanded ? 275 : 36,
@@ -310,7 +376,8 @@ export const App: React.FC = () => {
                 color: '#10b981',
                 fontSize: 13,
                 fontWeight: 500,
-                backdropFilter: 'blur(8px)'
+                backdropFilter: 'blur(8px)',
+                pointerEvents: 'none'
               }}
             >
               <FolderDown size={20} />
@@ -715,6 +782,12 @@ export const App: React.FC = () => {
                         shelfItems.map(item => (
                           <div
                             key={item.id}
+                            onClick={() => {
+                              if (item.path) {
+                                invokeTauri('open_file', { path: item.path });
+                              }
+                            }}
+                            title={item.path ? `Buka: ${item.path}` : item.name}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
@@ -723,8 +796,12 @@ export const App: React.FC = () => {
                               padding: '6px 8px',
                               borderRadius: 8,
                               border: 'none',
-                              fontSize: 11
+                              fontSize: 11,
+                              cursor: item.path ? 'pointer' : 'default',
+                              transition: 'background 0.15s'
                             }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#18181b'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#0c0c0e'}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                               <FileText size={14} color="#38bdf8" />
@@ -732,18 +809,23 @@ export const App: React.FC = () => {
                                 color: '#f4f4f5', 
                                 whiteSpace: 'nowrap', 
                                 overflow: 'hidden', 
-                                textOverflow: 'ellipsis',
+                                textOverflow: 'ellipsis', 
                                 maxWidth: 260
                               }}>
                                 {item.name}
                               </span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ color: '#71717a', fontSize: 10 }}>
-                                {formatFileSize(item.size)}
-                              </span>
+                              {item.size > 0 && (
+                                <span style={{ color: '#71717a', fontSize: 10 }}>
+                                  {formatFileSize(item.size)}
+                                </span>
+                              )}
                               <button
-                                onClick={() => setShelfItems(prev => prev.filter(i => i.id !== item.id))}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShelfItems(prev => prev.filter(i => i.id !== item.id));
+                                }}
                                 style={{ background: 'none', border: 'none', outline: 'none', color: '#71717a', cursor: 'pointer' }}
                               >
                                 <X size={12} />

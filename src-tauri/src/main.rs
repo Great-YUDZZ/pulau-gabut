@@ -224,6 +224,15 @@ fn get_hardware_metrics(system_state: tauri::State<Arc<Mutex<System>>>) -> Hardw
     }
 }
 
+#[tauri::command]
+fn open_file(path: String) {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let _ = Command::new("explorer").arg(&path).spawn();
+    }
+}
+
 fn main() {
     let system = Arc::new(Mutex::new(System::new_all()));
     let sys_for_bg = Arc::clone(&system);
@@ -354,7 +363,8 @@ fn main() {
             smtc_play_pause,
             smtc_next,
             smtc_previous,
-            get_hardware_metrics
+            get_hardware_metrics,
+            open_file
         ])
         .run(tauri::generate_context!())
         .expect("gagal menjalankan aplikasi My Island");
