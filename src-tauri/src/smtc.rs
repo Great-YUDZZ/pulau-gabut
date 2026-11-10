@@ -12,35 +12,76 @@ pub struct MediaTrackInfo {
 }
 
 #[cfg(windows)]
-extern "system" {
-    fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+#[repr(C)]
+struct KEYBDINPUT {
+    w_vk: u16,
+    w_scan: u16,
+    dw_flags: u32,
+    time: u32,
+    dw_extra_info: usize,
 }
 
-const VK_MEDIA_NEXT_TRACK: u8 = 0xB0;
-const VK_MEDIA_PREV_TRACK: u8 = 0xB1;
-const VK_MEDIA_PLAY_PAUSE: u8 = 0xB3;
-const KEYEVENTF_KEYUP: u32 = 0x0002;
+#[cfg(windows)]
+#[repr(C)]
+struct INPUT {
+    r#type: u32,
+    ki: KEYBDINPUT,
+    padding: [u8; 24],
+}
 
-pub fn trigger_play_pause() {
+#[cfg(windows)]
+extern "system" {
+    fn SendInput(c_inputs: u32, p_inputs: *const INPUT, cb_size: i32) -> u32;
+}
+
+const INPUT_KEYBOARD: u32 = 1;
+const KEYEVENTF_KEYUP: u32 = 0x0002;
+const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
+
+const VK_MEDIA_NEXT_TRACK: u16 = 0xB0;
+const VK_MEDIA_PREV_TRACK: u16 = 0xB1;
+const VK_MEDIA_PLAY_PAUSE: u16 = 0xB3;
+
+fn send_media_key(vk: u16) {
     #[cfg(windows)]
     unsafe {
-        keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0);
-        keybd_event(VK_MEDIA_PLAY_PAUSE, 0, KEYEVENTF_KEYUP, 0);
+        let mut down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ki: KEYBDINPUT {
+                w_vk: vk,
+                w_scan: 0,
+                dw_flags: KEYEVENTF_EXTENDEDKEY,
+                time: 0,
+                dw_extra_info: 0,
+            },
+            padding: [0; 24],
+        };
+
+        let mut up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ki: KEYBDINPUT {
+                w_vk: vk,
+                w_scan: 0,
+                dw_flags: KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
+                time: 0,
+                dw_extra_info: 0,
+            },
+            padding: [0; 24],
+        };
+
+        let inputs = [down, up];
+        SendInput(2, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
     }
+}
+
+pub fn trigger_play_pause() {
+    send_media_key(VK_MEDIA_PLAY_PAUSE);
 }
 
 pub fn trigger_next() {
-    #[cfg(windows)]
-    unsafe {
-        keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0);
-        keybd_event(VK_MEDIA_NEXT_TRACK, 0, KEYEVENTF_KEYUP, 0);
-    }
+    send_media_key(VK_MEDIA_NEXT_TRACK);
 }
 
 pub fn trigger_previous() {
-    #[cfg(windows)]
-    unsafe {
-        keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0);
-        keybd_event(VK_MEDIA_PREV_TRACK, 0, KEYEVENTF_KEYUP, 0);
-    }
+    send_media_key(VK_MEDIA_PREV_TRACK);
 }
