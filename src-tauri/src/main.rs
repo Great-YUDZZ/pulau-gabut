@@ -11,7 +11,7 @@ use sysinfo::System;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
 };
 
 #[derive(Serialize)]
@@ -53,15 +53,41 @@ extern "system" {
     fn K32GetProcessMemoryInfo(h_process: isize, counters: *mut ProcessMemoryCounters, cb: u32) -> i32;
     fn RegisterHotKey(h_wnd: isize, id: i32, fs_modifiers: u32, vk: u32) -> i32;
     fn GetMessageW(lp_msg: *mut MSG, h_wnd: isize, w_msg_filter_min: u32, w_msg_filter_max: u32) -> i32;
+    fn PeekMessageW(lp_msg: *mut MSG, h_wnd: isize, w_msg_filter_min: u32, w_msg_filter_max: u32, w_remove_msg: u32) -> i32;
     fn TranslateMessage(lp_msg: *const MSG) -> i32;
     fn DispatchMessageW(lp_msg: *const MSG) -> isize;
+    fn SetWindowPos(
+        h_wnd: isize,
+        h_wnd_insert_after: isize,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        u_flags: u32,
+    ) -> i32;
+    fn DwmSetWindowAttribute(
+        h_wnd: isize,
+        dw_attribute: u32,
+        pv_attribute: *const std::ffi::c_void,
+        cb_attribute: u32,
+    ) -> i32;
 }
+
+const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+const DWMWCP_DONOTROUND: u32 = 1;
+const DWMWA_BORDER_COLOR: u32 = 34;
+const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
 
 const MOD_ALT: u32 = 0x0001;
 const MOD_CONTROL: u32 = 0x0002;
-const MOD_NOREPEAT: u32 = 0x4000;
+const MOD_SHIFT: u32 = 0x0004;
 const VK_I: u32 = 0x49;
+const VK_SPACE: u32 = 0x20;
 const WM_HOTKEY: u32 = 0x0312;
+
+const HWND_TOPMOST: isize = -1;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_SHOWWINDOW: u32 = 0x0040;
 
 fn get_process_ram_mb() -> u64 {
     #[cfg(windows)]
@@ -88,8 +114,28 @@ fn get_process_ram_mb() -> u64 {
 
 fn size_of(mode: &str) -> (f64, f64) {
     match mode {
-        "expanded" => (450.0, 280.0),
-        _ => (320.0, 42.0), // compact flush
+        "expanded" => (440.0, 280.0),
+        _ => (440.0, 40.0), // compact flush (same width so x never shifts)
+    }
+}
+
+fn apply_dwm_borderless(hwnd: isize) {
+    #[cfg(windows)]
+    unsafe {
+        let border_color: u32 = DWMWA_COLOR_NONE;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let corner_pref: u32 = DWMWCP_DONOTROUND;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_pref as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
     }
 }
 
@@ -104,14 +150,23 @@ fn place(win: &WebviewWindow, mode: &str) -> Result<(), String> {
     };
 
     let scale = mon.scale_factor();
-    let (pw, ph) = ((w * scale).round() as u32, (h * scale).round() as u32);
+    let (pw, ph) = ((w * scale).round() as i32, (h * scale).round() as i32);
     let x = mon.position().x + ((mon.size().width as f64 - pw as f64) / 2.0).round() as i32;
     let y = mon.position().y; // Flush exactly against top edge (0)
 
-    win.set_size(PhysicalSize::new(pw, ph))
-        .map_err(|e| e.to_string())?;
-    win.set_position(PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    if let Ok(hwnd) = win.hwnd() {
+        apply_dwm_borderless(hwnd.0 as isize);
+        unsafe {
+            // Atomic update of position AND size together in a single call to prevent any tearing
+            SetWindowPos(hwnd.0 as isize, HWND_TOPMOST, x, y, pw, ph, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    } else {
+        win.set_size(PhysicalSize::new(pw as u32, ph as u32))
+            .map_err(|e| e.to_string())?;
+        win.set_position(PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }
@@ -238,20 +293,30 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Background thread for System-wide Global Hotkey (Ctrl + Alt + I)
+            // Background thread for System-wide Global Hotkeys (Ctrl+Alt+I and Ctrl+Shift+Space)
             let app_handle_for_hotkey = app.handle().clone();
             std::thread::spawn(move || {
                 #[cfg(windows)]
                 unsafe {
-                    // ID 1001 for Ctrl + Alt + I
-                    let registered = RegisterHotKey(0, 1001, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_I);
-                    if registered != 0 {
-                        applog::log("Global Hotkey Ctrl+Alt+I berhasil didaftarkan");
-                        let mut msg: MSG = std::mem::zeroed();
-                        while GetMessageW(&mut msg, 0, 0, 0) > 0 {
-                            if msg.message == WM_HOTKEY && msg.w_param == 1001 {
-                                if let Some(win) = app_handle_for_hotkey.get_webview_window("main") {
+                    let mut msg: MSG = std::mem::zeroed();
+                    // Force message queue creation for this thread
+                    PeekMessageW(&mut msg, 0, 0, 0, 0);
+
+                    // Register Ctrl + Alt + I (ID 1001)
+                    let reg1 = RegisterHotKey(0, 1001, MOD_CONTROL | MOD_ALT, VK_I);
+                    // Register Ctrl + Shift + Space (ID 1002) as reliable alternative
+                    let reg2 = RegisterHotKey(0, 1002, MOD_CONTROL | MOD_SHIFT, VK_SPACE);
+
+                    applog::log(&format!("Pendaftaran Hotkey: Ctrl+Alt+I={reg1}, Ctrl+Shift+Space={reg2}"));
+
+                    while GetMessageW(&mut msg, 0, 0, 0) > 0 {
+                        if msg.message == WM_HOTKEY && (msg.w_param == 1001 || msg.w_param == 1002) {
+                            let app = app_handle_for_hotkey.clone();
+                            let app_in_closure = app.clone();
+                            let _ = app.run_on_main_thread(move || {
+                                if let Some(win) = app_in_closure.get_webview_window("main") {
                                     let is_vis = win.is_visible().unwrap_or(true);
+                                    applog::log(&format!("Hotkey ditekan, mengubah visibilitas jendela (saat ini: {is_vis})"));
                                     if is_vis {
                                         let _ = win.hide();
                                     } else {
@@ -260,12 +325,10 @@ fn main() {
                                         let _ = win.set_focus();
                                     }
                                 }
-                            }
-                            TranslateMessage(&msg);
-                            DispatchMessageW(&msg);
+                            });
                         }
-                    } else {
-                        applog::log("Gagal mendaftarkan Global Hotkey Ctrl+Alt+I");
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
                     }
                 }
             });

@@ -12,8 +12,8 @@
       {
         "label": "main",
         "title": "My Island",
-        "width": 320,
-        "height": 44,
+        "width": 440,
+        "height": 40,
         "x": 480,
         "y": 0,
         "decorations": false,

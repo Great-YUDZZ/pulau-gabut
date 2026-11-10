@@ -2,8 +2,6 @@
   --bg-island: #000000;
   --bg-surface: #0a0a0c;
   --bg-surface-elevated: #141416;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-active: rgba(255, 255, 255, 0.16);
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
@@ -31,6 +29,9 @@ html, body {
   width: 100vw;
   margin: 0;
   padding: 0;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -40,7 +41,11 @@ html, body {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 0; /* Flush right against the top of the monitor */
+  padding-top: 0;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 /* EQ Audio Indicator Bars */

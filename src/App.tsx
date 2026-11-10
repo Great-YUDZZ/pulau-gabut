@@ -67,40 +67,43 @@ export const App: React.FC = () => {
 
   const hoverLeaveTimer = useRef<number | null>(null);
 
-  // Global Hotkey listener (Ctrl + Alt + I or Escape to collapse)
+  // Keyboard shortcut listener (Escape to collapse)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'i') {
-        invokeTauri('toggle_visibility');
-      } else if (e.key === 'Escape' && isExpanded) {
+      if (e.key === 'Escape' && isExpanded) {
         setIsExpanded(false);
-        updateWindowMode(false);
+        setTimeout(() => {
+          invokeTauri('set_mode', { mode: 'compact' });
+        }, 320);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isExpanded]);
-  const updateWindowMode = (expanded: boolean) => {
-    invokeTauri('set_mode', { mode: expanded ? 'expanded' : 'compact' });
-  };
 
+  // Smooth Hover Handlers
   const handleMouseEnter = () => {
     if (hoverLeaveTimer.current) {
       window.clearTimeout(hoverLeaveTimer.current);
       hoverLeaveTimer.current = null;
     }
     if (!isExpanded) {
+      // 1. Expand the OS canvas immediately so Framer Motion has room to grow without clipping
+      invokeTauri('set_mode', { mode: 'expanded' });
       setIsExpanded(true);
-      updateWindowMode(true);
     }
   };
 
   const handleMouseLeave = () => {
     if (hoverLeaveTimer.current) window.clearTimeout(hoverLeaveTimer.current);
     hoverLeaveTimer.current = window.setTimeout(() => {
+      // 1. First animate the visual capsule back to compact size smoothly
       setIsExpanded(false);
-      updateWindowMode(false);
-    }, 450);
+      // 2. Only resize the OS window bounds AFTER the spring animation completes (320ms)
+      setTimeout(() => {
+        invokeTauri('set_mode', { mode: 'compact' });
+      }, 320);
+    }, 380);
   };
 
   const showToast = (msg: string) => {
@@ -248,14 +251,17 @@ export const App: React.FC = () => {
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'flex-start',
-        padding: 0
+        padding: 0,
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        boxShadow: 'none'
       }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <motion.div
-        layout
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         animate={{
@@ -269,13 +275,14 @@ export const App: React.FC = () => {
         transition={{
           type: 'spring',
           stiffness: 280,
-          damping: 28,
-          mass: 0.6
+          damping: 26,
+          mass: 0.7
         }}
         style={{
           background: '#000000',
           border: 'none',
-          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.7)',
+          outline: 'none',
+          boxShadow: 'none', // Strictly no shadow to eliminate any halo/border
           overflow: 'hidden',
           position: 'relative',
           display: 'flex',
@@ -293,7 +300,7 @@ export const App: React.FC = () => {
               style={{
                 position: 'absolute',
                 inset: 0,
-                background: 'rgba(16, 185, 129, 0.18)',
+                background: 'rgba(16, 185, 129, 0.22)',
                 border: '2px dashed #10b981',
                 zIndex: 50,
                 display: 'flex',
@@ -315,8 +322,8 @@ export const App: React.FC = () => {
         {/* 1. Compact Notch Bar */}
         <div
           onClick={() => {
+            invokeTauri('set_mode', { mode: 'expanded' });
             setIsExpanded(true);
-            updateWindowMode(true);
           }}
           style={{
             height: 36,
@@ -327,7 +334,8 @@ export const App: React.FC = () => {
             padding: '0 12px',
             fontSize: 11,
             color: '#a1a1aa',
-            borderBottom: isExpanded ? '1px solid rgba(255, 255, 255, 0.06)' : 'none'
+            border: 'none',
+            outline: 'none'
           }}
         >
           {/* Left: Jam & Cuaca */}
@@ -341,7 +349,7 @@ export const App: React.FC = () => {
             </span>
           </div>
 
-          {/* Center: Clean Spacer */}
+          {/* Center: Clean Spacer (no camera dot) */}
           <div style={{ flex: 1 }} />
 
           {/* Right: Media indicator atau Timer */}
@@ -375,17 +383,19 @@ export const App: React.FC = () => {
         <AnimatePresence>
           {isExpanded && (
             <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18 }}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.1 } }}
+              transition={{ duration: 0.2, delay: 0.04 }}
               style={{
                 flex: 1,
                 display: 'flex',
                 flexDirection: 'column',
                 padding: '8px 12px 10px 12px',
                 gap: 8,
-                background: '#000000'
+                background: '#000000',
+                border: 'none',
+                outline: 'none'
               }}
             >
               {/* Top Navigation Tabs */}
@@ -394,7 +404,7 @@ export const App: React.FC = () => {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 4,
-                  background: 'rgba(255, 255, 255, 0.04)',
+                  background: 'rgba(255, 255, 255, 0.05)',
                   padding: 3,
                   borderRadius: 10
                 }}
@@ -417,9 +427,10 @@ export const App: React.FC = () => {
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 5,
-                        background: isActive ? '#18181b' : 'transparent',
+                        background: isActive ? '#1c1c1f' : 'transparent',
                         color: isActive ? '#f4f4f5' : '#71717a',
                         border: 'none',
+                        outline: 'none',
                         borderRadius: 7,
                         padding: '5px 0',
                         fontSize: 11,
@@ -446,11 +457,11 @@ export const App: React.FC = () => {
                           width: 48,
                           height: 48,
                           borderRadius: 10,
-                          background: '#18181b',
+                          background: '#141416',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          border: '1px solid rgba(255, 255, 255, 0.08)'
+                          border: 'none'
                         }}
                       >
                         <Music size={22} color="#10b981" />
@@ -486,6 +497,7 @@ export const App: React.FC = () => {
                         style={{
                           background: 'none',
                           border: 'none',
+                          outline: 'none',
                           color: '#a1a1aa',
                           cursor: 'pointer',
                           display: 'flex',
@@ -504,12 +516,12 @@ export const App: React.FC = () => {
                           borderRadius: '50%',
                           background: '#f4f4f5',
                           border: 'none',
+                          outline: 'none',
                           color: '#000000',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          cursor: 'pointer',
-                          boxShadow: '0 2px 10px rgba(255, 255, 255, 0.2)'
+                          cursor: 'pointer'
                         }}
                       >
                         {media.isPlaying ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}
@@ -520,6 +532,7 @@ export const App: React.FC = () => {
                         style={{
                           background: 'none',
                           border: 'none',
+                          outline: 'none',
                           color: '#a1a1aa',
                           cursor: 'pointer',
                           display: 'flex',
@@ -548,10 +561,10 @@ export const App: React.FC = () => {
                       {/* Cuaca Card */}
                       <div 
                         style={{
-                          background: '#0e0e11',
+                          background: '#0c0c0e',
                           padding: 10,
                           borderRadius: 10,
-                          border: '1px solid rgba(255, 255, 255, 0.05)'
+                          border: 'none'
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#38bdf8', fontSize: 11 }}>
@@ -569,10 +582,10 @@ export const App: React.FC = () => {
                       {/* Telemetri Suhu & RAM */}
                       <div 
                         style={{
-                          background: '#0e0e11',
+                          background: '#0c0c0e',
                           padding: 10,
                           borderRadius: 10,
-                          border: '1px solid rgba(255, 255, 255, 0.05)'
+                          border: 'none'
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#10b981', fontSize: 11 }}>
@@ -594,7 +607,7 @@ export const App: React.FC = () => {
                       justifyContent: 'space-between', 
                       fontSize: 10, 
                       color: '#71717a', 
-                      background: 'rgba(255, 255, 255, 0.02)', 
+                      background: 'rgba(255, 255, 255, 0.03)', 
                       padding: '6px 8px', 
                       borderRadius: 6 
                     }}>
@@ -637,6 +650,7 @@ export const App: React.FC = () => {
                           background: timerRunning ? '#ef4444' : '#10b981',
                           color: '#ffffff',
                           border: 'none',
+                          outline: 'none',
                           fontSize: 11,
                           fontWeight: 600,
                           cursor: 'pointer',
@@ -660,7 +674,8 @@ export const App: React.FC = () => {
                           borderRadius: 8,
                           background: '#18181b',
                           color: '#a1a1aa',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          border: 'none',
+                          outline: 'none',
                           fontSize: 11,
                           cursor: 'pointer'
                         }}
@@ -704,10 +719,10 @@ export const App: React.FC = () => {
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'space-between',
-                              background: '#0e0e11',
+                              background: '#0c0c0e',
                               padding: '6px 8px',
                               borderRadius: 8,
-                              border: '1px solid rgba(255, 255, 255, 0.05)',
+                              border: 'none',
                               fontSize: 11
                             }}
                           >
@@ -729,7 +744,7 @@ export const App: React.FC = () => {
                               </span>
                               <button
                                 onClick={() => setShelfItems(prev => prev.filter(i => i.id !== item.id))}
-                                style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer' }}
+                                style={{ background: 'none', border: 'none', outline: 'none', color: '#71717a', cursor: 'pointer' }}
                               >
                                 <X size={12} />
                               </button>
@@ -746,6 +761,7 @@ export const App: React.FC = () => {
                           style={{
                             background: 'none',
                             border: 'none',
+                            outline: 'none',
                             color: '#ef4444',
                             fontSize: 10,
                             cursor: 'pointer'
