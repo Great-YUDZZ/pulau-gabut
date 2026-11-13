@@ -47,6 +47,14 @@ struct MSG {
     l_private: u32,
 }
 
+#[repr(C)]
+struct RECT {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
 #[cfg(windows)]
 extern "system" {
     fn GetCurrentProcess() -> isize;
@@ -71,7 +79,16 @@ extern "system" {
         pv_attribute: *const std::ffi::c_void,
         cb_attribute: u32,
     ) -> i32;
+    fn GetForegroundWindow() -> isize;
+    fn GetWindowThreadProcessId(h_wnd: isize, lpdw_process_id: *mut u32) -> u32;
+    fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> isize;
+    fn CloseHandle(h_object: isize) -> i32;
+    fn QueryFullProcessImageNameW(h_process: isize, dw_flags: u32, lp_exe_name: *mut u16, lpdw_size: *mut u32) -> i32;
+    fn IsZoomed(h_wnd: isize) -> i32;
+    fn GetWindowRect(h_wnd: isize, lp_rect: *mut RECT) -> i32;
 }
+
+const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
 const DWMWCP_DONOTROUND: u32 = 1;
@@ -115,6 +132,7 @@ fn get_process_ram_mb() -> u64 {
 fn size_of(mode: &str) -> (f64, f64) {
     match mode {
         "expanded" => (440.0, 280.0),
+        "mini" => (84.0, 30.0),
         _ => (440.0, 40.0), // compact flush (same width so x never shifts)
     }
 }
@@ -236,6 +254,53 @@ fn open_file(path: String) {
         use std::process::Command;
         let _ = Command::new("explorer").arg(&path).spawn();
     }
+}
+
+#[tauri::command]
+fn is_browser_active() -> bool {
+    #[cfg(windows)]
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd == 0 {
+            return false;
+        }
+
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        GetWindowRect(hwnd, &mut rect);
+        let is_maximized = IsZoomed(hwnd) != 0 || (rect.top <= 10 && (rect.bottom - rect.top) > 500);
+        if !is_maximized {
+            return false;
+        }
+
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return false;
+        }
+
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle != 0 {
+            let mut buf = [0u16; 512];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+            CloseHandle(handle);
+            if ok != 0 && len > 0 {
+                let path = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+                let browsers = [
+                    "chrome.exe",
+                    "brave.exe",
+                    "msedge.exe",
+                    "firefox.exe",
+                    "opera.exe",
+                    "vivaldi.exe",
+                    "arc.exe",
+                    "zen.exe",
+                ];
+                return browsers.iter().any(|b| path.ends_with(b));
+            }
+        }
+    }
+    false
 }
 
 fn main() {
@@ -378,7 +443,8 @@ fn main() {
             smtc_previous,
             get_media_info,
             get_hardware_metrics,
-            open_file
+            open_file,
+            is_browser_active
         ])
         .run(tauri::generate_context!())
         .expect("gagal menjalankan aplikasi My Island");

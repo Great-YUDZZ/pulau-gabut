@@ -24,10 +24,10 @@ import { HardwareMetrics, WeatherData, MediaState, ShelfItem, TabType, LyricLine
 import { fetchLyrics } from './lyrics';
 
 // Safely access Tauri invoke
-const invokeTauri = async (cmd: string, args: Record<string, any> = {}) => {
+const invokeTauri = async <T = any>(cmd: string, args: Record<string, any> = {}): Promise<T | null> => {
   try {
     if ((window as any).__TAURI__?.core) {
-      return await (window as any).__TAURI__.core.invoke(cmd, args);
+      return (await (window as any).__TAURI__.core.invoke(cmd, args)) as T;
     }
   } catch (err) {
     console.warn(`Tauri invoke '${cmd}' failed:`, err);
@@ -79,16 +79,56 @@ export const App: React.FC = () => {
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
+  // Auto-Shrink Browser Focus State
+  const [isBrowserActive, setIsBrowserActive] = useState<boolean>(false);
+  const [isHovered, setIsHovered] = useState<boolean>(false);
+  const isMini = isBrowserActive && !isHovered && !isExpanded;
+  const currentModeRef = useRef<'mini' | 'compact' | 'expanded'>('compact');
   const hoverLeaveTimer = useRef<number | null>(null);
+
+  // Synchronize OS Window Size & Position with Active Mode
+  useEffect(() => {
+    let targetMode: 'mini' | 'compact' | 'expanded' = 'compact';
+    if (isExpanded) {
+      targetMode = 'expanded';
+    } else if (isMini) {
+      targetMode = 'mini';
+    } else {
+      targetMode = 'compact';
+    }
+
+    if (currentModeRef.current !== targetMode) {
+      currentModeRef.current = targetMode;
+      invokeTauri('set_mode', { mode: targetMode });
+    }
+  }, [isExpanded, isMini]);
+
+  // Periodic Foreground Browser Poller (every 600ms)
+  useEffect(() => {
+    let mounted = true;
+    const checkBrowser = async () => {
+      try {
+        const active = await invokeTauri<boolean>('is_browser_active');
+        if (mounted && typeof active === 'boolean') {
+          setIsBrowserActive(active);
+        }
+      } catch {
+        // Silently ignore if command not available
+      }
+    };
+    checkBrowser();
+    const interval = setInterval(checkBrowser, 600);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Keyboard shortcut listener (Escape to collapse)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isExpanded) {
         setIsExpanded(false);
-        setTimeout(() => {
-          invokeTauri('set_mode', { mode: 'compact' });
-        }, 320);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -101,23 +141,16 @@ export const App: React.FC = () => {
       window.clearTimeout(hoverLeaveTimer.current);
       hoverLeaveTimer.current = null;
     }
-    if (!isExpanded) {
-      // 1. Expand the OS canvas immediately so Framer Motion has room to grow without clipping
-      invokeTauri('set_mode', { mode: 'expanded' });
-      setIsExpanded(true);
-    }
+    setIsHovered(true);
   };
 
   const handleMouseLeave = () => {
     if (hoverLeaveTimer.current) window.clearTimeout(hoverLeaveTimer.current);
+    const delay = isExpanded ? 350 : (isBrowserActive ? 1500 : 300);
     hoverLeaveTimer.current = window.setTimeout(() => {
-      // 1. First animate the visual capsule back to compact size smoothly
       setIsExpanded(false);
-      // 2. Only resize the OS window bounds AFTER the spring animation completes (320ms)
-      setTimeout(() => {
-        invokeTauri('set_mode', { mode: 'compact' });
-      }, 320);
-    }, 380);
+      setIsHovered(false);
+    }, delay);
   };
 
   const showToast = (msg: string) => {
@@ -517,10 +550,10 @@ export const App: React.FC = () => {
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         animate={{
-          width: isExpanded ? 440 : 310,
-          height: isExpanded ? 275 : 36,
-          borderBottomLeftRadius: 20,
-          borderBottomRightRadius: 20,
+          width: isExpanded ? 440 : isMini ? 84 : 310,
+          height: isExpanded ? 275 : isMini ? 30 : 36,
+          borderBottomLeftRadius: isMini ? 12 : 20,
+          borderBottomRightRadius: isMini ? 12 : 20,
           borderTopLeftRadius: 0,
           borderTopRightRadius: 0,
         }}
@@ -572,14 +605,37 @@ export const App: React.FC = () => {
           )}
         </AnimatePresence>
 
-        {/* 1. Compact Notch Bar */}
-        <div
-          onClick={() => {
-            invokeTauri('set_mode', { mode: 'expanded' });
-            setIsExpanded(true);
-          }}
-          style={{
-            height: 36,
+        {/* 1. Header Notch: Micro-Clock when isMini, Compact Bar when normal */}
+        {isMini ? (
+          <div
+            onClick={() => {
+              setIsExpanded(true);
+            }}
+            style={{
+              height: 30,
+              minHeight: 30,
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#f4f4f5',
+              fontFamily: 'monospace',
+              letterSpacing: '0.02em',
+              userSelect: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            {currentTime || '12:00'}
+          </div>
+        ) : (
+          <div
+            onClick={() => {
+              setIsExpanded(true);
+            }}
+            style={{
+              height: 36,
             minHeight: 36,
             display: 'flex',
             alignItems: 'center',
@@ -641,6 +697,7 @@ export const App: React.FC = () => {
             )}
           </div>
         </div>
+        )}
 
         {/* 2. Expanded HUD Content */}
         <AnimatePresence>
