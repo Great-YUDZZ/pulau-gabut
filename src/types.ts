@@ -36,4 +36,32 @@ export interface ShelfItem {
   addedAt: Date;
 }
 
+export interface ClipboardItem {
+  id: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface SystemHudState {
+  volume: number;
+  muted: boolean;
+  battery_pct: number;
+  is_charging: boolean;
+  has_battery: boolean;
+}
+
+export interface NotificationItem {
+  id: number;
+  app_name: string;
+  title: string;
+  body: string;
+}
+
+export interface NotificationResponse {
+  access_status: string;
+  items: NotificationItem[];
+}
+
+export type CompactViewMode = 'music' | 'weather' | 'timer';
+
 export type TabType = 'music' | 'weather' | 'calendar' | 'shelf';

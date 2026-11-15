@@ -1,7 +1,10 @@
 #![windows_subsystem = "windows"]
 
 mod applog;
+mod clipboard;
+mod hud;
 mod memory;
+mod notifications;
 mod smtc;
 
 use serde::Serialize;
@@ -86,6 +89,12 @@ extern "system" {
     fn QueryFullProcessImageNameW(h_process: isize, dw_flags: u32, lp_exe_name: *mut u16, lpdw_size: *mut u32) -> i32;
     fn IsZoomed(h_wnd: isize) -> i32;
     fn GetWindowRect(h_wnd: isize, lp_rect: *mut RECT) -> i32;
+}
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+extern "system" {
+    fn SHQueryUserNotificationState(pquns: *mut i32) -> i32;
 }
 
 const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
@@ -254,6 +263,69 @@ fn open_file(path: String) {
         use std::process::Command;
         let _ = Command::new("explorer").arg(&path).spawn();
     }
+}
+
+#[tauri::command]
+fn get_clipboard_history() -> Vec<clipboard::ClipboardItem> {
+    clipboard::poll_clipboard();
+    clipboard::get_history()
+}
+
+#[tauri::command]
+fn copy_clipboard_item(text: String) -> bool {
+    clipboard::copy_to_clipboard(&text)
+}
+
+#[tauri::command]
+fn clear_clipboard_history() {
+    clipboard::clear_history();
+}
+
+#[tauri::command]
+fn get_system_hud_state() -> hud::SystemHudState {
+    hud::get_system_hud_state()
+}
+
+#[tauri::command]
+fn set_system_volume(level: u32) -> bool {
+    hud::set_system_volume(level)
+}
+
+#[tauri::command]
+fn toggle_system_mute() -> bool {
+    hud::toggle_system_mute()
+}
+
+#[tauri::command]
+fn get_latest_notifications() -> notifications::NotificationResponse {
+    notifications::get_latest_notifications()
+}
+
+#[tauri::command]
+fn open_notification_settings() {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let _ = Command::new("explorer").arg("ms-settings:notifications").spawn();
+    }
+}
+
+#[tauri::command]
+fn smtc_seek(position_sec: f64) -> bool {
+    smtc::seek_to(position_sec)
+}
+
+#[tauri::command]
+fn is_fullscreen_app() -> bool {
+    #[cfg(windows)]
+    unsafe {
+        let mut state: i32 = 0;
+        if SHQueryUserNotificationState(&mut state) == 0 {
+            // QUNS_BUSY = 2, QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4
+            return matches!(state, 2 | 3 | 4);
+        }
+    }
+    false
 }
 
 #[tauri::command]
@@ -441,10 +513,20 @@ fn main() {
             smtc_play_pause,
             smtc_next,
             smtc_previous,
+            smtc_seek,
             get_media_info,
             get_hardware_metrics,
             open_file,
-            is_browser_active
+            is_browser_active,
+            is_fullscreen_app,
+            get_clipboard_history,
+            copy_clipboard_item,
+            clear_clipboard_history,
+            get_system_hud_state,
+            set_system_volume,
+            toggle_system_mute,
+            get_latest_notifications,
+            open_notification_settings
         ])
         .run(tauri::generate_context!())
         .expect("gagal menjalankan aplikasi My Island");

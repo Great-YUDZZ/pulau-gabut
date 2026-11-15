@@ -18,10 +18,45 @@ import {
   Move,
   GripVertical,
   Trash2,
-  Mic2
+  Mic2,
+  Volume2,
+  VolumeX,
+  Battery,
+  BatteryCharging,
+  Bell,
+  Copy,
+  ClipboardList
 } from 'lucide-react';
-import { HardwareMetrics, WeatherData, MediaState, ShelfItem, TabType, LyricLine } from './types';
+import {
+  HardwareMetrics,
+  WeatherData,
+  MediaState,
+  ShelfItem,
+  TabType,
+  LyricLine,
+  ClipboardItem,
+  SystemHudState,
+  NotificationResponse,
+  CompactViewMode
+} from './types';
 import { fetchLyrics } from './lyrics';
+
+const ConcaveEar: React.FC<{ side: 'left' | 'right'; size?: number }> = ({ side, size = 12 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox={`0 0 ${size} ${size}`}
+    fill="none"
+    style={{
+      flexShrink: 0,
+      display: 'block',
+      pointerEvents: 'none',
+      transform: side === 'right' ? 'scaleX(-1)' : undefined
+    }}
+  >
+    <path d={`M0 0 H${size} V${size} A${size} ${size} 0 0 0 0 0 Z`} fill="#000000" />
+  </svg>
+);
 
 // Safely access Tauri invoke
 const invokeTauri = async <T = any>(cmd: string, args: Record<string, any> = {}): Promise<T | null> => {
@@ -79,12 +114,57 @@ export const App: React.FC = () => {
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Auto-Shrink Browser Focus State
+  // Auto-Shrink Browser Focus State & Hover Hysteresis
   const [isBrowserActive, setIsBrowserActive] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isHovered, setIsHovered] = useState<boolean>(false);
   const isMini = isBrowserActive && !isHovered && !isExpanded;
   const currentModeRef = useRef<'mini' | 'compact' | 'expanded'>('compact');
   const hoverLeaveTimer = useRef<number | null>(null);
+  const hoverEnterTimer = useRef<number | null>(null);
+
+  // Compact Scroll-Wheel Quick Switch
+  const [compactMode, setCompactMode] = useState<CompactViewMode>('music');
+  const lastWheelRef = useRef<number>(0);
+
+  // System HUD (Volume + Battery) & Live Activity Pill
+  const [hudState, setHudState] = useState<SystemHudState>({
+    volume: 50,
+    muted: false,
+    battery_pct: 100,
+    is_charging: false,
+    has_battery: false
+  });
+  const prevHudRef = useRef<SystemHudState | null>(null);
+  const [liveActivity, setLiveActivity] = useState<{
+    id: string;
+    kind: 'volume' | 'power' | 'notif';
+    title: string;
+    subtitle?: string;
+  } | null>(null);
+  const liveActivityTimerRef = useRef<number | null>(null);
+
+  // Notifications & Clipboard in Shelf
+  const [notifResponse, setNotifResponse] = useState<NotificationResponse | null>(null);
+  const lastNotifIdRef = useRef<number | null>(null);
+  const [shelfSubTab, setShelfSubTab] = useState<'files' | 'clipboard'>('files');
+  const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
+  const [clipboardLoading, setClipboardLoading] = useState<boolean>(false);
+  const [clipboardError, setClipboardError] = useState<string | null>(null);
+
+  const triggerLiveActivity = (
+    kind: 'volume' | 'power' | 'notif',
+    title: string,
+    subtitle?: string
+  ) => {
+    if (liveActivityTimerRef.current) {
+      window.clearTimeout(liveActivityTimerRef.current);
+    }
+    setLiveActivity({ id: `${kind}-${Date.now()}`, kind, title, subtitle });
+    liveActivityTimerRef.current = window.setTimeout(() => {
+      setLiveActivity(null);
+    }, 2500);
+  };
 
   // Synchronize OS Window Size & Position with Active Mode
   useEffect(() => {
@@ -103,25 +183,114 @@ export const App: React.FC = () => {
     }
   }, [isExpanded, isMini]);
 
-  // Periodic Foreground Browser Poller (every 600ms)
+  // Periodic Foreground Browser & Fullscreen Poller
   useEffect(() => {
     let mounted = true;
-    const checkBrowser = async () => {
+    const checkWindowContext = async () => {
       try {
-        const active = await invokeTauri<boolean>('is_browser_active');
+        const [active, full] = await Promise.all([
+          invokeTauri<boolean>('is_browser_active'),
+          invokeTauri<boolean>('is_fullscreen_app')
+        ]);
         if (mounted && typeof active === 'boolean') {
           setIsBrowserActive(active);
+        }
+        if (mounted && typeof full === 'boolean') {
+          setIsFullscreen(full);
+          if (full) {
+            setIsExpanded(false);
+            setIsHovered(false);
+          }
         }
       } catch {
         // Silently ignore if command not available
       }
     };
-    checkBrowser();
-    const interval = setInterval(checkBrowser, 600);
+    checkWindowContext();
+    const interval = setInterval(checkWindowContext, 700);
     return () => {
       mounted = false;
       clearInterval(interval);
     };
+  }, []);
+
+  // Periodic System HUD (Volume & Battery) Poller
+  useEffect(() => {
+    let mounted = true;
+    const pollHud = async () => {
+      const state = await invokeTauri<SystemHudState>('get_system_hud_state');
+      if (!mounted || !state) return;
+      const prev = prevHudRef.current;
+      if (prev) {
+        if (prev.volume !== state.volume || prev.muted !== state.muted) {
+          triggerLiveActivity(
+            'volume',
+            state.muted ? 'Audio Dibisukan' : `Volume ${state.volume}%`
+          );
+        } else if (prev.has_battery && prev.is_charging !== state.is_charging) {
+          triggerLiveActivity(
+            'power',
+            state.is_charging ? 'Mengisi Daya' : 'Mode Baterai',
+            `${state.battery_pct}%`
+          );
+        }
+      }
+      prevHudRef.current = state;
+      setHudState(state);
+    };
+    pollHud();
+    const interval = setInterval(pollHud, 1200);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Periodic Windows Notification Mirroring Poller
+  useEffect(() => {
+    let mounted = true;
+    const pollNotifs = async () => {
+      const res = await invokeTauri<NotificationResponse>('get_latest_notifications');
+      if (!mounted || !res) return;
+      setNotifResponse(res);
+      if (res.items.length > 0) {
+        const newest = res.items[0];
+        if (lastNotifIdRef.current !== null && newest.id !== lastNotifIdRef.current) {
+          triggerLiveActivity('notif', newest.title || newest.app_name, newest.body || newest.app_name);
+        }
+        lastNotifIdRef.current = newest.id;
+      } else if (lastNotifIdRef.current === null) {
+        lastNotifIdRef.current = 0;
+      }
+    };
+    pollNotifs();
+    const interval = setInterval(pollNotifs, 3000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Periodic Clipboard History Poller
+  const refreshClipboard = async (showSkeleton = false) => {
+    if (showSkeleton) setClipboardLoading(true);
+    try {
+      const items = await invokeTauri<ClipboardItem[]>('get_clipboard_history');
+      if (items) {
+        setClipboardItems(items);
+        setClipboardError(null);
+      }
+    } catch {
+      setClipboardError('Gagal membaca riwayat clipboard');
+    } finally {
+      if (showSkeleton) setClipboardLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshClipboard(true);
+    const interval = setInterval(() => refreshClipboard(false), 1500);
+    return () => clearInterval(interval);
   }, []);
 
   // Keyboard shortcut listener (Escape to collapse)
@@ -135,22 +304,60 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isExpanded]);
 
-  // Smooth Hover Handlers
+  // Smooth Hover Handlers with 80ms Hysteresis
   const handleMouseEnter = () => {
     if (hoverLeaveTimer.current) {
       window.clearTimeout(hoverLeaveTimer.current);
       hoverLeaveTimer.current = null;
     }
-    setIsHovered(true);
+    if (!isHovered && !isExpanded) {
+      if (hoverEnterTimer.current) window.clearTimeout(hoverEnterTimer.current);
+      hoverEnterTimer.current = window.setTimeout(() => {
+        setIsHovered(true);
+      }, 80);
+    } else {
+      setIsHovered(true);
+    }
   };
 
   const handleMouseLeave = () => {
+    if (hoverEnterTimer.current) {
+      window.clearTimeout(hoverEnterTimer.current);
+      hoverEnterTimer.current = null;
+    }
     if (hoverLeaveTimer.current) window.clearTimeout(hoverLeaveTimer.current);
     const delay = isExpanded ? 350 : (isBrowserActive ? 1500 : 300);
     hoverLeaveTimer.current = window.setTimeout(() => {
       setIsExpanded(false);
       setIsHovered(false);
     }, delay);
+  };
+
+  const handleCompactWheel = (e: React.WheelEvent) => {
+    if (isExpanded || isMini) return;
+    const now = Date.now();
+    if (now - lastWheelRef.current < 180) return;
+    lastWheelRef.current = now;
+    const modes: CompactViewMode[] = ['music', 'weather', 'timer'];
+    const idx = modes.indexOf(compactMode);
+    const nextIdx = e.deltaY > 0 ? (idx + 1) % modes.length : (idx - 1 + modes.length) % modes.length;
+    setCompactMode(modes[nextIdx]);
+  };
+
+  const handleSeek = async (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!media.durationSec || media.durationSec <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const targetSec = ratio * media.durationSec;
+    setPlaybackPosition(targetSec);
+    await invokeTauri('smtc_seek', { positionSec: targetSec });
+  };
+
+  const formatMediaTime = (secs?: number) => {
+    if (!secs || !Number.isFinite(secs) || secs < 0) return '0:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   const showToast = (msg: string) => {
@@ -536,45 +743,51 @@ export const App: React.FC = () => {
         background: 'transparent',
         border: 'none',
         outline: 'none',
-        boxShadow: 'none'
+        boxShadow: 'none',
+        opacity: isFullscreen ? 0 : 1,
+        pointerEvents: isFullscreen ? 'none' : 'auto',
+        transition: 'opacity 0.2s ease'
       }}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <motion.div
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        animate={{
-          width: isExpanded ? 440 : isMini ? 84 : 310,
-          height: isExpanded ? 275 : isMini ? 30 : 36,
-          borderBottomLeftRadius: isMini ? 12 : 20,
-          borderBottomRightRadius: isMini ? 12 : 20,
-          borderTopLeftRadius: 0,
-          borderTopRightRadius: 0,
-        }}
-        transition={{
-          type: 'spring',
-          stiffness: 280,
-          damping: 26,
-          mass: 0.7
-        }}
-        style={{
-          background: '#000000',
-          border: 'none',
-          outline: 'none',
-          boxShadow: 'none', // Strictly no shadow to eliminate any halo/border
-          overflow: 'hidden',
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'column',
-          cursor: isExpanded ? 'default' : 'pointer'
-        }}
-      >
+      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+        {!isMini && <ConcaveEar side="left" size={isExpanded ? 14 : 10} />}
+        <motion.div
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onWheel={handleCompactWheel}
+          animate={{
+            width: isExpanded ? 440 : isMini ? 84 : 310,
+            height: isExpanded ? 290 : isMini ? 30 : 36,
+            borderBottomLeftRadius: isMini ? 12 : 20,
+            borderBottomRightRadius: isMini ? 12 : 20,
+            borderTopLeftRadius: 0,
+            borderTopRightRadius: 0,
+          }}
+          transition={{
+            type: 'spring',
+            stiffness: 320,
+            damping: 28,
+            mass: 0.7
+          }}
+          style={{
+            background: '#000000',
+            border: 'none',
+            outline: 'none',
+            boxShadow: 'none',
+            overflow: 'hidden',
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            cursor: isExpanded ? 'default' : 'pointer'
+          }}
+        >
         {/* Drop Over Indicator */}
         <AnimatePresence>
           {isDraggingOver && (
@@ -661,40 +874,90 @@ export const App: React.FC = () => {
           {/* Center: Clean Spacer (no camera dot) */}
           <div style={{ flex: 1 }} />
 
-          {/* Right: Media indicator atau Timer */}
+          {/* Right: Live Activity Pill or Scroll-Wheel Quick Switch */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {timerRunning ? (
-              <span style={{ color: '#10b981', fontFamily: 'monospace', fontWeight: 600 }}>
-                {formatTimer(timerSeconds)}
-              </span>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div className="eq-container">
-                  <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 6 }} />
-                  <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 10 }} />
-                  <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 5 }} />
-                </div>
-                <AnimatePresence mode="wait">
-                  <motion.span
-                    key={lyrics && currentLyricIndex >= 0 ? `lyr-${currentLyricIndex}` : `title-${media.title}`}
-                    initial={{ opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -3 }}
-                    transition={{ duration: 0.18 }}
-                    style={{ 
-                      maxWidth: lyrics && currentLyricIndex >= 0 ? 175 : 95, 
-                      whiteSpace: 'nowrap', 
-                      overflow: 'hidden', 
-                      textOverflow: 'ellipsis',
-                      color: lyrics && currentLyricIndex >= 0 ? '#10b981' : '#f4f4f5',
-                      fontWeight: lyrics && currentLyricIndex >= 0 ? 600 : 400
-                    }}
-                  >
-                    {lyrics && currentLyricIndex >= 0 ? lyrics[currentLyricIndex].text : media.title}
-                  </motion.span>
-                </AnimatePresence>
-              </div>
-            )}
+            <AnimatePresence mode="wait">
+              {liveActivity ? (
+                <motion.div
+                  key={liveActivity.id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.16 }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#10b981', fontWeight: 600 }}
+                >
+                  {liveActivity.kind === 'volume' ? (
+                    hudState.muted ? <VolumeX size={12} /> : <Volume2 size={12} />
+                  ) : liveActivity.kind === 'power' ? (
+                    hudState.is_charging ? <BatteryCharging size={12} /> : <Battery size={12} />
+                  ) : (
+                    <Bell size={12} />
+                  )}
+                  <span style={{ maxWidth: 165, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#f4f4f5' }}>
+                    {liveActivity.title}
+                  </span>
+                </motion.div>
+              ) : compactMode === 'timer' || timerRunning ? (
+                <motion.div
+                  key="compact-timer"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+                >
+                  <Timer size={12} color="#10b981" />
+                  <span style={{ color: '#10b981', fontFamily: 'monospace', fontWeight: 600 }}>
+                    {formatTimer(timerSeconds)}
+                  </span>
+                </motion.div>
+              ) : compactMode === 'weather' ? (
+                <motion.div
+                  key="compact-weather"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#38bdf8' }}
+                >
+                  <CloudSun size={12} />
+                  <span style={{ maxWidth: 150, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#f4f4f5' }}>
+                    {weather.city} • {weather.desc}
+                  </span>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="compact-music"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <div className="eq-container">
+                    <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 6 }} />
+                    <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 10 }} />
+                    <div className={`eq-bar ${media.isPlaying ? 'active' : ''}`} style={{ height: 5 }} />
+                  </div>
+                  <AnimatePresence mode="wait">
+                    <motion.span
+                      key={lyrics && currentLyricIndex >= 0 ? `lyr-${currentLyricIndex}` : `title-${media.title}`}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -3 }}
+                      transition={{ duration: 0.18 }}
+                      style={{ 
+                        maxWidth: lyrics && currentLyricIndex >= 0 ? 175 : 95, 
+                        whiteSpace: 'nowrap', 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis',
+                        color: lyrics && currentLyricIndex >= 0 ? '#10b981' : '#f4f4f5',
+                        fontWeight: lyrics && currentLyricIndex >= 0 ? 600 : 400
+                      }}
+                    >
+                      {lyrics && currentLyricIndex >= 0 ? lyrics[currentLyricIndex].text : media.title}
+                    </motion.span>
+                  </AnimatePresence>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
         )}
@@ -884,6 +1147,43 @@ export const App: React.FC = () => {
                       </div>
                     ) : null}
 
+                    {/* Seeking Progress Bar (boring.notch style) */}
+                    {!showLyricsView && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div
+                          onClick={handleSeek}
+                          title="Klik untuk lompat ke posisi lagu"
+                          style={{
+                            height: 5,
+                            width: '100%',
+                            background: 'rgba(255, 255, 255, 0.1)',
+                            borderRadius: 999,
+                            cursor: media.durationSec ? 'pointer' : 'default',
+                            overflow: 'hidden',
+                            position: 'relative'
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${
+                                media.durationSec && media.durationSec > 0
+                                  ? Math.min(100, (playbackPosition / media.durationSec) * 100)
+                                  : 0
+                              }%`,
+                              background: '#10b981',
+                              borderRadius: 999,
+                              transition: 'width 0.25s linear'
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#71717a', fontFamily: 'monospace' }}>
+                          <span>{formatMediaTime(playbackPosition)}</span>
+                          <span>{formatMediaTime(media.durationSec)}</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Controls */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
                       <button
@@ -938,9 +1238,55 @@ export const App: React.FC = () => {
                       </button>
                     </div>
 
+                    {/* Inline Volume HUD & Battery */}
                     {!showLyricsView && (
-                      <div style={{ fontSize: 10, color: '#52525b', textAlign: 'center' }}>
-                        Sinkron otomatis dengan Windows SMTC & LRCLIB Synced Lyrics
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 2 }}>
+                        <button
+                          onClick={async () => {
+                            const muted = await invokeTauri<boolean>('toggle_system_mute');
+                            if (typeof muted === 'boolean') {
+                              setHudState(prev => ({ ...prev, muted }));
+                            }
+                          }}
+                          title={hudState.muted ? 'Bunyikan Audio' : 'Bisukan Audio'}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: hudState.muted ? '#ef4444' : '#a1a1aa',
+                            cursor: 'pointer',
+                            padding: 2,
+                            display: 'flex',
+                            alignItems: 'center'
+                          }}
+                        >
+                          {hudState.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                        </button>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={hudState.volume}
+                          onChange={async (e) => {
+                            const val = Number(e.target.value);
+                            setHudState(prev => ({ ...prev, volume: val, muted: false }));
+                            await invokeTauri('set_system_volume', { level: val });
+                          }}
+                          style={{
+                            flex: 1,
+                            accentColor: '#10b981',
+                            height: 3,
+                            cursor: 'pointer'
+                          }}
+                        />
+                        <span style={{ fontSize: 10, color: '#71717a', fontFamily: 'monospace', minWidth: 28, textAlign: 'right' }}>
+                          {hudState.volume}%
+                        </span>
+                        {hudState.has_battery && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: hudState.is_charging ? '#10b981' : '#a1a1aa', marginLeft: 4 }}>
+                            {hudState.is_charging ? <BatteryCharging size={12} /> : <Battery size={12} />}
+                            <span style={{ fontFamily: 'monospace' }}>{hudState.battery_pct}%</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1008,7 +1354,42 @@ export const App: React.FC = () => {
                       borderRadius: 6 
                     }}>
                       <span>Kelembapan: {weather.humidity}%</span>
-                      <span>Kecepatan Angin: {weather.wind} km/h</span>
+                      <span>Angin: {weather.wind} km/h</span>
+                    </div>
+
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: 10,
+                      color: '#a1a1aa',
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      padding: '6px 8px',
+                      borderRadius: 6
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Bell size={12} color={notifResponse?.access_status === 'Allowed' ? '#10b981' : '#eab308'} />
+                        <span>
+                          Notifikasi: {notifResponse?.access_status === 'Allowed' ? `${notifResponse.items.length} aktif` : 'Perlu izin Windows'}
+                        </span>
+                      </div>
+                      {notifResponse?.access_status !== 'Allowed' && (
+                        <button
+                          onClick={() => invokeTauri('open_notification_settings')}
+                          style={{
+                            background: 'rgba(16, 185, 129, 0.15)',
+                            border: '1px solid rgba(16, 185, 129, 0.35)',
+                            color: '#10b981',
+                            borderRadius: 5,
+                            padding: '2px 7px',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Izinkan
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1082,34 +1463,62 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                {/* 4. Tab File Shelf (Bento Grid Staging) */}
+                {/* 4. Tab File Shelf & Clipboard History */}
                 {activeTab === 'shelf' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: 165, gap: 6 }}>
-                    {/* Bento Header Bar */}
+                  <div style={{ display: 'flex', flexDirection: 'column', height: 175, gap: 6 }}>
+                    {/* Sub-Tab & Action Header */}
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      padding: '2px 4px'
+                      padding: '2px 4px',
+                      gap: 6
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          padding: '2px 7px',
-                          borderRadius: 6,
-                          background: 'rgba(16, 185, 129, 0.15)',
-                          color: '#10b981',
-                          letterSpacing: '0.02em'
-                        }}>
-                          {shelfItems.length} Titipan
-                        </span>
-                        <span style={{ fontSize: 10, color: '#71717a' }}>
-                          {shelfItems.length > 0 ? 'Tahan & seret ke folder tujuan' : 'Area titip sementara'}
-                        </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255,255,255,0.04)', padding: 2, borderRadius: 7 }}>
+                        <button
+                          onClick={() => setShelfSubTab('files')}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '3px 8px',
+                            borderRadius: 5,
+                            border: 'none',
+                            background: shelfSubTab === 'files' ? '#1c1c1f' : 'transparent',
+                            color: shelfSubTab === 'files' ? '#f4f4f5' : '#71717a',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <FolderDown size={11} />
+                          <span>Berkas ({shelfItems.length})</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShelfSubTab('clipboard');
+                            refreshClipboard(true);
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '3px 8px',
+                            borderRadius: 5,
+                            border: 'none',
+                            background: shelfSubTab === 'clipboard' ? '#1c1c1f' : 'transparent',
+                            color: shelfSubTab === 'clipboard' ? '#f4f4f5' : '#71717a',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <ClipboardList size={11} />
+                          <span>Clipboard ({clipboardItems.length})</span>
+                        </button>
                       </div>
 
-                      {shelfItems.length > 0 && (
+                      {shelfSubTab === 'files' && shelfItems.length > 0 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           {shelfItems.length > 1 && (
                             <button
@@ -1157,7 +1566,105 @@ export const App: React.FC = () => {
                           </button>
                         </div>
                       )}
+
+                      {shelfSubTab === 'clipboard' && clipboardItems.length > 0 && (
+                        <button
+                          onClick={async () => {
+                            await invokeTauri('clear_clipboard_history');
+                            setClipboardItems([]);
+                            showToast('Riwayat clipboard dibersihkan');
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#71717a',
+                            fontSize: 10,
+                            cursor: 'pointer',
+                            padding: '3px 6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}
+                          title="Hapus semua riwayat clipboard"
+                        >
+                          <Trash2 size={11} />
+                          <span>Bersihkan</span>
+                        </button>
+                      )}
                     </div>
+
+                    {shelfSubTab === 'clipboard' ? (
+                      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, paddingRight: 2 }}>
+                        {clipboardLoading ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {[1, 2, 3].map(n => (
+                              <div key={n} style={{ height: 34, borderRadius: 8, background: 'rgba(255,255,255,0.04)' }} />
+                            ))}
+                          </div>
+                        ) : clipboardError ? (
+                          <div style={{ margin: 'auto', textAlign: 'center', fontSize: 11, color: '#ef4444' }}>
+                            {clipboardError}
+                          </div>
+                        ) : clipboardItems.length === 0 ? (
+                          <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            border: '1.5px dashed rgba(255, 255, 255, 0.1)',
+                            borderRadius: 12,
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            padding: '18px 12px',
+                            gap: 6,
+                            textAlign: 'center',
+                            flex: 1
+                          }}>
+                            <ClipboardList size={22} color="#10b981" strokeWidth={1.75} />
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#f4f4f5' }}>
+                              Clipboard Masih Kosong
+                            </span>
+                            <span style={{ fontSize: 10, color: '#71717a', maxWidth: 260, lineHeight: 1.3 }}>
+                              Salin teks apa saja di Windows (Ctrl+C), riwayat akan muncul di sini untuk disalin ulang 1-klik.
+                            </span>
+                          </div>
+                        ) : (
+                          clipboardItems.map(clip => (
+                            <div
+                              key={clip.id}
+                              onClick={async () => {
+                                const ok = await invokeTauri<boolean>('copy_clipboard_item', { text: clip.text });
+                                if (ok) showToast('Disalin ke clipboard');
+                              }}
+                              title="Klik untuk menyalin ulang ke clipboard"
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                background: '#0d0d10',
+                                border: '1px solid rgba(255, 255, 255, 0.07)',
+                                borderRadius: 8,
+                                padding: '6px 9px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <span style={{
+                                fontSize: 11,
+                                color: '#e4e4e7',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                flex: 1
+                              }}>
+                                {clip.text}
+                              </span>
+                              <Copy size={12} color="#10b981" style={{ flexShrink: 0 }} />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ) : (
+                      <>
 
                     {/* Bento Grid Content */}
                     <div style={{
@@ -1296,6 +1803,8 @@ export const App: React.FC = () => {
                         })
                       )}
                     </div>
+                    </>
+                    )}
                   </div>
                 )}
               </div>
@@ -1333,6 +1842,8 @@ export const App: React.FC = () => {
           )}
         </AnimatePresence>
       </motion.div>
+      {!isMini && <ConcaveEar side="right" size={isExpanded ? 14 : 10} />}
+      </div>
     </div>
   );
 };

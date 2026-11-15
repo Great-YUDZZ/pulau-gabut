@@ -186,6 +186,18 @@ pub fn trigger_previous() {
     send_media_key(VK_MEDIA_PREV_TRACK);
 }
 
+pub fn seek_to(position_sec: f64) -> bool {
+    if let Some(session) = get_current_session() {
+        let ticks = (position_sec.max(0.0) * 10_000_000.0) as i64;
+        if let Ok(op) = session.TryChangePlaybackPositionAsync(ticks) {
+            if let Ok(success) = wait_async_bool(op) {
+                return success;
+            }
+        }
+    }
+    false
+}
+
 // Virtual key fallback via SendInput
 #[cfg(windows)]
 #[repr(C)]
