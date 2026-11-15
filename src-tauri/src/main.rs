@@ -321,8 +321,9 @@ fn is_fullscreen_app() -> bool {
     unsafe {
         let mut state: i32 = 0;
         if SHQueryUserNotificationState(&mut state) == 0 {
-            // QUNS_BUSY = 2, QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4
-            return matches!(state, 2 | 3 | 4);
+            // Only hide on actual fullscreen D3D games/videos (3) or presentation mode (4),
+            // NOT QUNS_BUSY (2) which can trigger on Desktop / Rainmeter / shell states.
+            return matches!(state, 3 | 4);
         }
     }
     false

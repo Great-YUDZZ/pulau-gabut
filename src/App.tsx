@@ -754,7 +754,7 @@ export const App: React.FC = () => {
       onDrop={handleDrop}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-        {!isMini && <ConcaveEar side="left" size={isExpanded ? 14 : 10} />}
+        {!isMini && <ConcaveEar side="left" size={isExpanded ? 16 : 12} />}
         <motion.div
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
@@ -860,15 +860,22 @@ export const App: React.FC = () => {
             outline: 'none'
           }}
         >
-          {/* Left: Jam & Cuaca */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Left: Jam, Baterai & Cuaca */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <span style={{ fontWeight: 600, color: '#f4f4f5', fontFamily: 'monospace' }}>
               {currentTime || '12:00'}
             </span>
-            <span style={{ color: '#71717a' }}>•</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              <span>{weather.temp}°C</span>
-            </span>
+            <span style={{ color: '#52525b' }}>•</span>
+            <span>{weather.temp}°C</span>
+            {hudState.has_battery && (
+              <>
+                <span style={{ color: '#52525b' }}>•</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 2, color: hudState.is_charging ? '#10b981' : '#a1a1aa' }}>
+                  {hudState.is_charging ? <BatteryCharging size={11} /> : <Battery size={11} />}
+                  <span style={{ fontSize: 10, fontFamily: 'monospace' }}>{hudState.battery_pct}%</span>
+                </span>
+              </>
+            )}
           </div>
 
           {/* Center: Clean Spacer (no camera dot) */}
@@ -1842,7 +1849,7 @@ export const App: React.FC = () => {
           )}
         </AnimatePresence>
       </motion.div>
-      {!isMini && <ConcaveEar side="right" size={isExpanded ? 14 : 10} />}
+      {!isMini && <ConcaveEar side="right" size={isExpanded ? 16 : 12} />}
       </div>
     </div>
   );
