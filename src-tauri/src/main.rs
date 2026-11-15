@@ -140,9 +140,9 @@ fn get_process_ram_mb() -> u64 {
 
 fn size_of(mode: &str) -> (f64, f64) {
     match mode {
-        "expanded" => (440.0, 280.0),
+        "expanded" => (476.0, 296.0),
         "mini" => (84.0, 30.0),
-        _ => (440.0, 40.0), // compact flush (same width so x never shifts)
+        _ => (440.0, 40.0), // compact flush (fits 310px + 2x10px concave ears)
     }
 }
 
